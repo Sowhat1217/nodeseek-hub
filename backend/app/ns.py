@@ -75,7 +75,9 @@ class LoginError(NSError):
     pass
 
 
-NOT_LOGGED_IN = re.compile(r"未登录|请先登录|登录已过期|重新登录|not.?logged|unauthori[sz]ed|login", re.I)
+NOT_LOGGED_IN = re.compile(
+    r"未登录|请先登录|登录已过期|重新登录|not.?logged|unauthori[sz]ed|login|user[\s_]+not[\s_]+found", re.I
+)
 _login_lock = threading.Lock()  # one browser login at a time
 
 
@@ -88,12 +90,21 @@ def _load_session() -> dict:
 
 
 def _save_session(cookies: dict, ua: str) -> None:
-    db.set_setting("ns_session", encrypt(json.dumps({"cookies": cookies, "ua": ua, "at": config.now_str()})))
+    """Save only a session that passed the authenticated, read-only API check."""
+    db.set_setting("ns_session", encrypt(json.dumps({
+        "cookies": cookies, "ua": ua, "at": config.now_str(), "verified": True,
+    })))
+
+
+def _verified_session(s: dict) -> bool:
+    # Legacy versions saved cf_clearance/theme cookies as a successful login.
+    return s.get("verified") is True and bool(s.get("cookies"))
 
 
 def session_info() -> dict:
     s = _load_session()
-    return {"logged_in_at": s.get("at"), "has_session": bool(s.get("cookies"))}
+    verified = _verified_session(s)
+    return {"logged_in_at": s.get("at") if verified else None, "has_session": verified}
 
 
 def clear_session() -> None:
@@ -285,6 +296,36 @@ class Client:
         return parse_feed(r.text)
 
     # ---------- login ----------
+    def _verify_login(self, cookies: dict, ua: str) -> bool:
+        """Verify the exported cookies using NodeSeek's read-only authenticated API.
+
+        A browser redirect or cf_clearance only proves that a page/challenge was loaded.
+        Checking through the HTTP client also verifies the session used by sign-in/publish.
+        Do not use request(): its challenge handler can recursively call login().
+        """
+        if not cookies:
+            return False
+        session = self._new_session(cookies)
+        try:
+            r = session.get(
+                self.base + "/api/notification/unread-count",
+                headers={"User-Agent": ua, "Accept": "application/json", "Referer": self.base + "/"},
+                timeout=8,
+            )
+            if r.status_code != 200:
+                return False
+            try:
+                data = r.json()
+            except (ValueError, TypeError):
+                return False
+            return (
+                isinstance(data, dict)
+                and data.get("success") is True
+                and "unreadCount" in data
+            )
+        finally:
+            session.close()
+
     def login(self) -> None:
         """Log in with the account in Settings through a real browser (Turnstile), save the session."""
         cfg = config.get()["ns"]
@@ -295,6 +336,8 @@ class Client:
         except ImportError:
             raise LoginError("登录需要 seleniumbase：在 backend 里用 venv 的 pip 安装（pip install -r requirements.txt），并装好 Chrome")
         with _login_lock:
+            clear_session()
+            self._auth = None
             self.log("用浏览器登录 NodeSeek…")
             profile = str(db.DATA_DIR / "browser")  # a persistent profile, so NodeSeek remembers this device
             try:
@@ -314,20 +357,25 @@ class Client:
                     sb.sleep(2)
                     sb.click("[data-nsh='submit']")
                     ok = False
-                    for _ in range(30):
+                    deadline = time.monotonic() + 45
+                    next_probe = 0
+                    while time.monotonic() < deadline:
                         sb.sleep(1)
-                        if "signIn" not in sb.get_current_url():
-                            ok = True
-                            break
-                        if sb.is_element_visible("input[placeholder*='验证码']"):
+                        if sb.is_element_visible("input[placeholder*='验证码'], input[autocomplete='one-time-code']"):
                             raise LoginError("NodeSeek 要求邮箱验证码（新设备）。在自己电脑上用同一出口 IP 登录一次，或把这一步告诉开发者再处理。")
+                        on_login_page = "signin" in sb.get_current_url().lower()
+                        if not on_login_page and time.monotonic() >= next_probe:
+                            cookies = {c["name"]: c["value"] for c in sb.driver.get_cookies()}
+                            ua = sb.execute_script("return navigator.userAgent")
+                            if self._verify_login(cookies, ua):
+                                ok = True
+                                break
+                            next_probe = time.monotonic() + 3
                         err = sb.find_elements(LOGIN["error"])
-                        if err and err[0].text.strip():
+                        if err and err[0].text.strip() and on_login_page:
                             raise LoginError("登录失败：" + err[0].text.strip()[:100])
                     if not ok:
-                        raise LoginError("30 秒内没有登录成功，可能是人机验证没通过，稍后再试")
-                    cookies = {c["name"]: c["value"] for c in sb.driver.get_cookies()}
-                    ua = sb.execute_script("return navigator.userAgent")
+                        raise LoginError("未取得有效的 NodeSeek 登录状态（登录接口验证未通过）。页面跳转或通过人机验证不代表账号已登录，请检查账号、邮箱验证后重试。")
             except LoginError:
                 raise
             except SystemExit as e:  # seleniumbase exits the process when python3-tk / Chrome is missing
@@ -342,14 +390,18 @@ class Client:
 
     def _write(self, path, body, referer) -> tuple[bool, str]:
         """Call a write API; log in first if there is no session, and once more if it says we're logged out."""
-        if not _load_session().get("cookies"):
+        if not _verified_session(_load_session()):
             self.login()
         for attempt in range(2):
             code, data = self.api(path, body, referer, auth=True)
             msg = data.get("message") or json.dumps(data, ensure_ascii=False)
             logged_out = code in (401, 403) or (not data.get("success") and NOT_LOGGED_IN.search(msg))
-            if not logged_out or attempt:
+            if not logged_out:
                 return bool(data.get("success")), msg
+            clear_session()
+            self._auth = None
+            if attempt:
+                return False, msg
             self.log("登录状态失效，重新登录")
             self.login()
         return False, msg
