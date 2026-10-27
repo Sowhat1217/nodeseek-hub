@@ -20,6 +20,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests
@@ -79,6 +80,16 @@ NOT_LOGGED_IN = re.compile(
     r"未登录|请先登录|登录已过期|重新登录|not.?logged|unauthori[sz]ed|login|user[\s_]+not[\s_]+found", re.I
 )
 _login_lock = threading.Lock()  # one browser login at a time
+
+
+def _requires_email_verification(browser) -> bool:
+    path = urlsplit(browser.get_current_url()).path.lower()
+    return "emailsignin" in path or browser.is_element_visible(
+        "input[placeholder*='验证码'], input[placeholder*='validation code' i], input[autocomplete='one-time-code']"
+    )
+
+
+EMAIL_VERIFICATION_MESSAGE = "NodeSeek 要求邮箱验证码（邮箱动态验证登录）。请先完成该账号的邮箱验证后重试；当前未保存为已登录。"
 
 
 def _load_session() -> dict:
@@ -343,6 +354,8 @@ class Client:
             try:
                 with SB(uc=True, headless=False, xvfb=True, user_data_dir=profile) as sb:
                     sb.uc_open_with_reconnect(self.base + "/signIn.html", reconnect_time=6)
+                    if _requires_email_verification(sb):
+                        raise LoginError(EMAIL_VERIFICATION_MESSAGE)
                     sb.wait_for_element_visible(LOGIN["password"], timeout=40)
                     sb.sleep(1)
                     missing = sb.execute_script(MARK_LOGIN_FORM)
@@ -361,8 +374,8 @@ class Client:
                     next_probe = 0
                     while time.monotonic() < deadline:
                         sb.sleep(1)
-                        if sb.is_element_visible("input[placeholder*='验证码'], input[autocomplete='one-time-code']"):
-                            raise LoginError("NodeSeek 要求邮箱验证码（新设备）。在自己电脑上用同一出口 IP 登录一次，或把这一步告诉开发者再处理。")
+                        if _requires_email_verification(sb):
+                            raise LoginError(EMAIL_VERIFICATION_MESSAGE)
                         on_login_page = "signin" in sb.get_current_url().lower()
                         if not on_login_page and time.monotonic() >= next_probe:
                             cookies = {c["name"]: c["value"] for c in sb.driver.get_cookies()}

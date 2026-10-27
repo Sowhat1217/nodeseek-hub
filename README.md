@@ -178,6 +178,8 @@ cd backend
 
 **登录失败 / 浏览器启动失败**：确认装了 Chrome、`python3-tk`、`xvfb`。缺 `python3-tk` 时 seleniumbase 会直接退出，面板上会显示原因。数据中心 IP 偶尔过不了人机验证，过一会儿再点「重新登录」。
 
+**提示需要邮箱验证码**：NodeSeek 可能将登录流程转到 `emailSignIn.html`（邮箱动态验证登录）。这个页面尚未登录成功，即使已经通过 Cloudflare 验证也不能签到。需要先完成该账号的邮箱验证；本项目会保留明确的错误提示，不会把这个跳转保存为登录成功。
+
 **被 Cloudflare 拦截**：程序会自动用浏览器拿 `cf_clearance` 再重试。一直被拦，就换一台 IP 干净的服务器。
 
 **LLM 报「没有返回可用的 json」**：看报错里的 `finish_reason`。是 `length` 的话，要么模型在思考（检查 `LLM_THINKING`），要么一批帖子太多，把 `backend/app/price.py` 里的 `BATCH_TITLE`、`BATCH_WITH_BODY` 调小。

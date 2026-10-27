@@ -146,6 +146,34 @@ class LoginTests(unittest.TestCase):
         verify.assert_not_called()
         save.assert_not_called()
 
+    def test_email_signin_page_is_detected_before_waiting_for_password(self):
+        sb, selenium = self.browser(url="https://www.nodeseek.com/emailSignIn.html")
+        with patch.dict(sys.modules, {"seleniumbase": selenium}), \
+             patch.object(self.client, "_verify_login") as verify:
+            with self.assertRaisesRegex(ns.LoginError, "邮箱动态验证"):
+                self.client.login()
+        sb.wait_for_element_visible.assert_not_called()
+        verify.assert_not_called()
+        self.assertFalse(ns.session_info()["has_session"])
+
+    def test_redirect_to_email_signin_page_is_not_a_success(self):
+        sb, selenium = self.browser()
+        sb.get_current_url.side_effect = [
+            "https://www.nodeseek.com/signIn.html", "https://www.nodeseek.com/emailSignIn.html",
+        ]
+        with patch.dict(sys.modules, {"seleniumbase": selenium}), \
+             patch.object(self.client, "_verify_login") as verify:
+            with self.assertRaisesRegex(ns.LoginError, "邮箱动态验证"):
+                self.client.login()
+        verify.assert_not_called()
+        self.assertFalse(ns.session_info()["has_session"])
+
+    def test_english_email_code_selector_is_checked(self):
+        sb = Mock()
+        sb.get_current_url.return_value = "https://www.nodeseek.com/verify"
+        sb.is_element_visible.side_effect = lambda selector: "validation code" in selector
+        self.assertTrue(ns._requires_email_verification(sb))
+
     def test_login_waits_for_authenticated_cookies_after_redirect(self):
         sb, selenium = self.browser()
         sb.driver.get_cookies.side_effect = [
