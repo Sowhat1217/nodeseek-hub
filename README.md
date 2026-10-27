@@ -35,7 +35,7 @@ NodeSeek 的行情与动态面板：交易区溢价走势、各板块热度关�
 
 **通知**
 
-![通知](https://cloud.fleetinglife.org/f/LpT5/nodeseek4.png)
+![通知](https://cloud.fleetinglife.org/f/orCJ/nodeseek4.png)
 
 **设置**
 
