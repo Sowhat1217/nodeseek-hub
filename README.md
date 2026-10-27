@@ -3,9 +3,6 @@
 
 # nodeseek-hub
 
-> [!WARNING]
-> **免责声明**：签到、发帖、评论等「升级」功能会以你的账号与 NodeSeek 交互。若因使用本程序导致账号被限制或封禁，开发者概不负责，请斟酌使用，并遵守 NodeSeek 的社区规则。
-
 NodeSeek 的行情与动态面板：交易区溢价走势、各板块热度关键词、每日签到和发帖/评论草稿，结果通过 Telegram 推送。
 
 自托管，单用户，密码登录。后端 FastAPI + SQLite + APScheduler，前端 React + Vite + Tailwind + shadcn/ui，LLM 用任何 OpenAI 兼容接口（默认 DeepSeek）。
