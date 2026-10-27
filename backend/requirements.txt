@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+apscheduler>=3.10,<4
+cryptography>=42
+tzdata
+beautifulsoup4
+curl_cffi
+httpx
+# real browser for logging in (Turnstile) and Cloudflare challenges; needs Google Chrome (+ xvfb on Linux)
+seleniumbase
