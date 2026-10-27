@@ -21,7 +21,7 @@ NodeSeek 的行情与动态面板：交易区溢价走势、各板块热度关�
 需要一台能访问 NodeSeek 的服务器（国内机器一般连不上 `rss.nodeseek.com`），Debian 12+ 或 Ubuntu 22.04+，root 权限。
 
 ```bash
-git clone https://github.com/<你的用户名>/nodeseek-hub.git /opt/nodeseek-hub
+git clone https://github.com/fleetinglife/nodeseek-hub.git /opt/nodeseek-hub
 cd /opt/nodeseek-hub
 bash install.sh
 ```
