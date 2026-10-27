@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Play, ScrollText } from "lucide-react"
 import { toast } from "sonner"
 import { api, type Job, type Run, type RunStatus } from "@/lib/api"
@@ -44,19 +44,23 @@ export function JobPanel({ module, onRan, title = "定时任务" }: { module: st
   const [logFor, setLogFor] = useState<Job | null>(null)
   const [starting, setStarting] = useState<string | null>(null)
 
+  // whenever any job finishes a run — scheduled or manual — reload the data shown above
+  const finished = useRef<string | null>(null)
+  const onRanRef = useRef(onRan)
+  onRanRef.current = onRan
+  useEffect(() => {
+    if (!jobs) return
+    const sig = jobs.map((j) => `${j.name}:${j.running ? "r" : (j.last?.id ?? 0)}`).join(",")
+    if (finished.current !== null && finished.current !== sig) onRanRef.current?.()
+    finished.current = sig
+  }, [jobs])
+
   async function run(j: Job) {
     setStarting(j.name)
     try {
       await api.post(`/jobs/${j.name}/run`)
       toast.success(`已开始：${j.label}`)
       await refresh()
-      const wait = setInterval(async () => {
-        const list = await api.get<Job[]>(`/jobs?module=${module}`)
-        if (!list.find((x) => x.name === j.name)?.running) {
-          clearInterval(wait)
-          onRan?.()
-        }
-      }, 2000)
     } catch (e) {
       toast.error((e as Error).message)
     } finally {

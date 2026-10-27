@@ -8,8 +8,9 @@ export function useData<T>(load: () => Promise<T>, pollMs?: number, deps: unknow
   const loadRef = useRef(load)
   loadRef.current = load
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
+  // quiet (default): swap the data in place; loud: also flag `loading`, used when the user changes what is shown
+  const refresh = useCallback(async (loud = false) => {
+    if (loud === true) setLoading(true)
     try {
       setData(await loadRef.current())
       setError(null)
@@ -21,7 +22,7 @@ export function useData<T>(load: () => Promise<T>, pollMs?: number, deps: unknow
   }, [])
 
   useEffect(() => {
-    refresh()
+    refresh(true)
     if (!pollMs) return
     const id = setInterval(() => {
       if (document.visibilityState === "visible") refresh()
