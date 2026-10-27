@@ -79,7 +79,7 @@ DEFAULTS = {
         "tg_api": "https://api.telegram.org",
         "tg_token_enc": "",
         "tg_chat_id": "",
-        "modules": {"price": True, "hot": False, "checkin": True, "drafts": True, "errors": True},
+        "modules": {"price": True, "hot": True, "checkin": True, "drafts": True, "errors": True},
     },
     "cleanup": {
         "time": "02:00",

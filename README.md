@@ -36,7 +36,7 @@ bash install.sh
 装完后：
 
 ```bash
-nano /opt/nodeseek-hub/backend/.env      # 填 LLM_API_KEY
+vim /opt/nodeseek-hub/backend/.env      # 填 LLM_API_KEY
 systemctl restart nodeseek-hub
 ```
 
