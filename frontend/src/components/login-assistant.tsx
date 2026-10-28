@@ -13,6 +13,7 @@ export function LoginAssistant() {
   const [screen, setScreen] = useState<string>()
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
+  const [zoom, setZoom] = useState(false)
   const [now, setNow] = useState(Date.now())
   const seen = useRef("")
 
@@ -121,9 +122,11 @@ export function LoginAssistant() {
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">{flow.message}</p>
-          <div className="min-h-48 overflow-auto rounded-md border bg-white">
+          <Button variant="outline" size="sm" onClick={() => setZoom(!zoom)}>{zoom ? "适应窗口" : "放大画面"}</Button>
+          <div className="max-h-[65dvh] min-h-48 overflow-auto rounded-md border bg-white">
             {screen ? <img src={screen} alt="服务器上的 NodeSeek 登录窗口，点击画面即可操作" draggable={false}
-              onClick={click} className="block h-auto w-full cursor-pointer select-none" />
+              onClick={click} style={zoom ? { width: flow.width, maxWidth: "none" } : undefined}
+              className="block h-auto w-full cursor-pointer select-none" />
               : <p className="p-8 text-center text-sm text-slate-600">正在连接登录窗口…</p>}
           </div>
           <form className="flex gap-2" onSubmit={async (e) => { e.preventDefault(); if (text) { const value = text; setText(""); await send({ kind: "text", text: value }) } }}>
