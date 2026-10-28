@@ -40,7 +40,7 @@ class LoginTests(unittest.TestCase):
             "username": "test-user", "password_enc": "test-password",
         }}
         config.now_str = lambda: "2026-10-28 00:00:00"
-        self.client = ns.Client(log=Mock())
+        self.client = ns.Client(log=Mock(), manual=False)
         self.addCleanup(self.client.s.close)
 
     def verified(self):
@@ -55,7 +55,13 @@ class LoginTests(unittest.TestCase):
 
     def browser(self, *, verification=False, error="", url="https://www.nodeseek.com/board"):
         sb = Mock()
-        sb.execute_script.side_effect = lambda source: "" if source == ns.MARK_LOGIN_FORM else "test-agent"
+        def execute(source):
+            if source == ns.MARK_LOGIN_FORM:
+                return ""
+            if source == ns.LOGIN_CHALLENGE_STATE:
+                return {"present": False, "ready": False}
+            return "test-agent"
+        sb.execute_script.side_effect = execute
         sb.get_current_url.return_value = url
         sb.is_element_visible.return_value = verification
         sb.find_elements.return_value = [Mock(text=error)] if error else []
@@ -72,6 +78,49 @@ class LoginTests(unittest.TestCase):
             "cookies": {"cf_clearance": "test", "colorscheme": "dark"}, "at": "old",
         })
         self.assertEqual(ns.session_info(), {"has_session": False, "logged_in_at": None})
+
+    def test_automatic_failure_hands_off_before_same_browser_is_closed(self):
+        sb, selenium = self.browser()
+        flow = ns.login_flow.LoginFlow()
+        def manual(browser, actual_flow):
+            self.assertIs(browser, sb)
+            self.assertIs(actual_flow, flow)
+            selenium.SB.return_value.__exit__.assert_not_called()
+            self.assertFalse(ns.session_info()["has_session"])
+            return {"auth": "verified-manual"}, "test-agent"
+        with patch.dict(sys.modules, {"seleniumbase": selenium}), \
+             patch.object(self.client, "_automatic_login", side_effect=ns.LoginError("challenge")), \
+             patch.object(self.client, "_manual_login", side_effect=manual) as handoff:
+            self.client._login_browser(flow)
+        handoff.assert_called_once()
+        self.assertTrue(ns.session_info()["has_session"])
+
+    def test_canceled_handoff_cannot_save_session(self):
+        sb, selenium = self.browser()
+        flow = ns.login_flow.LoginFlow()
+        def manual(*args):
+            flow.stop.set()
+            return {"auth": "should-not-save"}, "test-agent"
+        with patch.dict(sys.modules, {"seleniumbase": selenium}), \
+             patch.object(self.client, "_automatic_login", side_effect=ns.LoginError("challenge")), \
+             patch.object(self.client, "_manual_login", side_effect=manual), \
+             self.assertRaises(ns.login_flow.FlowStopped):
+            self.client._login_browser(flow)
+        self.assertFalse(ns.session_info()["has_session"])
+        selenium.SB.return_value.__exit__.assert_called_once()
+
+    def test_account_edit_during_handoff_cannot_save_old_account_session(self):
+        sb, selenium = self.browser()
+        cfg = config.get()
+        config.get = lambda: cfg
+        def auto(*args):
+            cfg["ns"] = {**cfg["ns"], "username": "new-account"}
+            return {"auth": "old-account"}, "test-agent"
+        with patch.dict(sys.modules, {"seleniumbase": selenium}), \
+             patch.object(self.client, "_automatic_login", side_effect=auto), \
+             self.assertRaises(ns.LoginError):
+            self.client._login_browser()
+        self.assertFalse(ns.session_info()["has_session"])
 
     def test_verified_session_is_shown_as_logged_in(self):
         self.verified()
@@ -109,6 +158,47 @@ class LoginTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 self.client._verify_login({"auth": "test"}, "test-agent")
         session.close.assert_called_once()
+
+    def test_ready_turnstile_result_needs_no_fixed_sleep(self):
+        browser = Mock()
+        browser.execute_script.return_value = {"present": True, "ready": True}
+        self.client._wait_login_challenge(browser)
+        browser.sleep.assert_not_called()
+
+    def test_page_without_turnstile_remains_supported(self):
+        browser = Mock()
+        browser.execute_script.return_value = {"present": False, "ready": False}
+        self.client._wait_login_challenge(browser)
+        browser.sleep.assert_not_called()
+
+    def test_waits_for_delayed_turnstile_result(self):
+        browser, _ = self.browser()
+        browser.execute_script.side_effect = [
+            {"present": True, "ready": False}, {"present": True, "ready": True},
+        ]
+        with patch.object(ns.time, "monotonic", side_effect=[0, 1]):
+            self.client._wait_login_challenge(browser)
+        browser.sleep.assert_called_once_with(1)
+
+    def test_unreadable_challenge_state_is_not_accepted(self):
+        browser = Mock()
+        browser.execute_script.return_value = None
+        with self.assertRaisesRegex(ns.LoginError, "无法读取"):
+            self.client._wait_login_challenge(browser)
+
+    def test_empty_turnstile_result_prevents_password_submission(self):
+        browser, selenium = self.browser()
+        execute = browser.execute_script.side_effect
+        browser.execute_script.side_effect = lambda source: (
+            {"present": True, "ready": False} if source == ns.LOGIN_CHALLENGE_STATE else execute(source)
+        )
+        with patch.dict(sys.modules, {"seleniumbase": selenium}), \
+             patch.object(ns.time, "monotonic", side_effect=[0, 1, 31]), \
+             patch.object(ns, "_save_session") as save:
+            with self.assertRaisesRegex(ns.LoginError, "未提交登录请求"):
+                self.client.login()
+        browser.click.assert_not_called()
+        save.assert_not_called()
 
     def test_redirect_without_verified_auth_never_saves_success(self):
         self.verified()
