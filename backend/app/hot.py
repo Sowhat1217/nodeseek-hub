@@ -49,7 +49,7 @@ def analyze(ctx, win: str):
     cats = cfg["categories"]
     rows = db.q(
         f"SELECT post_id, title, category FROM topics WHERE published_at>=? "
-        f"{'AND category IN (%s)' % ','.join('?' * len(cats)) if cats else ''} ORDER BY post_id DESC LIMIT 600",
+        f"{'AND category IN (%s)' % ','.join('?' * len(cats)) if cats else ''} ORDER BY post_id DESC LIMIT 2000",
         [since] + cats,
     )
     if len(rows) < 3:
