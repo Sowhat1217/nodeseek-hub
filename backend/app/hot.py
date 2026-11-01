@@ -64,7 +64,9 @@ def analyze(ctx, win: str):
     for k in out.get("keywords", [])[: cfg["top_n"]]:
         if not k.get("word"):
             continue
-        pids = [int(p) for p in k.get("post_ids", []) if str(p).isdigit() and int(p) in ids]
+        raw = k.get("post_ids")
+        raw = raw if isinstance(raw, list) else ([] if raw is None else [raw])
+        pids = [int(p) for p in raw if str(p).isdigit() and int(p) in ids]
         kws.append({"word": str(k["word"])[:30], "heat": max(0, min(100, int(k.get("heat") or 0))),
                     "count": len(pids) or int(k.get("count") or 0), "post_ids": pids[:30]})
     kws.sort(key=lambda k: -k["heat"])
