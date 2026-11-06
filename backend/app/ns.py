@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests
+from curl_cffi.requests.exceptions import ConnectionError, Timeout
 
 from . import config, db, login_flow
 from .security import decrypt, encrypt
@@ -183,11 +184,12 @@ class Client:
         """auth=False: anonymous session. auth=True: the logged-in session (sign-in / post / comment only)."""
         url = path if path.startswith("http") else self.base + path
         extra = kw.pop("headers", None)
+        timeout = kw.pop("timeout", 30)
         for attempt in range(2):
             s, ua = self._auth_session() if auth else (self.s, self.ua)
             h = self._headers(extra)
             h["User-Agent"] = ua
-            r = s.request(method, url, headers=h, timeout=30, **kw)
+            r = s.request(method, url, headers=h, timeout=timeout, **kw)
             if not self._blocked(r):
                 return r
             if attempt == 0:
@@ -312,8 +314,25 @@ class Client:
         }
 
     def rss(self, url: str) -> list[dict]:
-        r = self.request("GET", url)
-        return parse_feed(r.text)
+        # Keep ordinary RSS retries below the default one-minute polling interval.
+        # Only this read-only request is retried; account writes are never replayed here.
+        for attempt in range(3):
+            try:
+                r = self.request("GET", url, timeout=15)
+            except (Timeout, ConnectionError) as exc:
+                if attempt == 2:
+                    raise NSError("RSS 拉取失败：连续 3 次超时或连接失败，请检查 RSS 服务或网络") from exc
+                reason = "请求超时" if isinstance(exc, Timeout) else "连接失败"
+            else:
+                if r.status_code not in (408, 500, 502, 503, 504):
+                    r.raise_for_status()
+                    return parse_feed(r.text)
+                if attempt == 2:
+                    raise NSError(f"RSS 拉取失败：HTTP {r.status_code}（已尝试 3 次）")
+                reason = f"HTTP {r.status_code}"
+            delay = attempt + 1
+            self.log(f"RSS {reason}，{delay} 秒后重试（第 {attempt + 2}/3 次）")
+            time.sleep(delay)
 
     # ---------- login ----------
     def _wait_login_challenge(self, browser, timeout: float = 30, flow=None) -> None:

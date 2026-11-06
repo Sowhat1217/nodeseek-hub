@@ -11,7 +11,7 @@ SYSTEM = """你在分析 NodeSeek 论坛（VPS、服务器、网络、开发者�
 要求：
 - 关键词要具体：商家名、产品、事件、技术名词（如"搬瓦工补货""DMIT 涨价""Cloudflare 故障""Claude 封号"），不要"求助""分享""VPS"这种泛词。
 - 同一件事的不同说法合并成一个关键词。
-- heat 是 0-100 的热度，综合帖子数和话题集中程度；count 是相关帖子数；post_ids 是相关帖子的 id（只能用给出的 id）。
+- heat 是 0-100 的整数热度，综合帖子数和话题集中程度；count 是相关帖子数；post_ids 必须是整数数组（只能用给出的 id，即使只有一帖也必须用数组）。
 - 按 heat 从高到低，最多 {top_n} 个；没有明显热点时可以少给。
 - summary：用一两句话概括这段时间的整体动向，不超过 80 字。
 只输出 JSON：{{"keywords": [{{"word": "...", "heat": 0, "count": 0, "post_ids": []}}], "summary": "..."}}"""
@@ -20,6 +20,51 @@ SYSTEM = """你在分析 NodeSeek 论坛（VPS、服务器、网络、开发者�
 def _slug(cat: str) -> str:
     cat = (cat or "").strip()
     return LABEL_TO_SLUG.get(cat, cat.lower())
+
+
+def _safe_int(value, default=0) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _post_ids(value, valid_ids: set[int]) -> list[int]:
+    # Models sometimes return a single id instead of an array. Never iterate a string
+    # (which would turn id "123" into three unrelated ids) or accept invented ids.
+    values = value if isinstance(value, list) else [value]
+    result = []
+    seen = set()
+    for p in values:
+        if isinstance(p, bool) or not isinstance(p, (int, str)):
+            continue
+        pid = _safe_int(p, -1)
+        if pid in valid_ids and pid not in seen:
+            result.append(pid)
+            seen.add(pid)
+    return result
+
+
+def _keywords(out, valid_ids: set[int], top_n: int) -> list[dict]:
+    if not isinstance(out, dict) or not isinstance(out.get("keywords"), list):
+        raise ValueError("LLM 热度结果格式错误：应返回包含 keywords 数组的 JSON 对象")
+    kws = []
+    for k in out["keywords"]:
+        if not isinstance(k, dict) or not isinstance(k.get("word"), str) or not k["word"].strip():
+            continue
+        pids = _post_ids(k.get("post_ids"), valid_ids)
+        kws.append({
+            "word": k["word"].strip()[:30],
+            "heat": max(0, min(100, _safe_int(k.get("heat")))),
+            "count": len(pids) or max(0, min(len(valid_ids), _safe_int(k.get("count")))),
+            "post_ids": pids[:30],
+        })
+    if out["keywords"] and not kws:
+        raise ValueError("LLM 热度结果格式错误：keywords 中没有可用的关键词")
+    kws.sort(key=lambda k: -k["heat"])
+    return kws[:top_n]
 
 
 def poll(ctx):
@@ -60,19 +105,11 @@ def analyze(ctx, win: str):
     ctx.log(f"最近 {hours} 小时 {len(rows)} 帖，调用 LLM（{llm.model()}）分析…")
     out = llm.chat_json(SYSTEM.format(top_n=cfg["top_n"]), json.dumps(payload, ensure_ascii=False), temperature=0.3)
     ids = {r["post_id"] for r in rows}
-    kws = []
-    for k in out.get("keywords", [])[: cfg["top_n"]]:
-        if not k.get("word"):
-            continue
-        raw = k.get("post_ids")
-        raw = raw if isinstance(raw, list) else ([] if raw is None else [raw])
-        pids = [int(p) for p in raw if str(p).isdigit() and int(p) in ids]
-        kws.append({"word": str(k["word"])[:30], "heat": max(0, min(100, int(k.get("heat") or 0))),
-                    "count": len(pids) or int(k.get("count") or 0), "post_ids": pids[:30]})
-    kws.sort(key=lambda k: -k["heat"])
+    kws = _keywords(out, ids, cfg["top_n"])
+    summary = out.get("summary") if isinstance(out.get("summary"), str) else ""
     db.ex(
         "INSERT INTO hot_snapshots(win,created_at,post_count,keywords,summary) VALUES(?,?,?,?,?)",
-        (win, config.now_str(), len(rows), json.dumps(kws, ensure_ascii=False), str(out.get("summary", ""))[:300]),
+        (win, config.now_str(), len(rows), json.dumps(kws, ensure_ascii=False), summary[:300]),
     )
     ctx.summary = f"{len(rows)} 帖 → {len(kws)} 个关键词"
     ctx.log(ctx.summary, "：", "、".join(k["word"] for k in kws[:8]))
@@ -80,8 +117,8 @@ def analyze(ctx, win: str):
         text = f"NodeSeek 今日热点（{len(rows)} 帖）\n" + "\n".join(
             f"{i + 1}. {k['word']}  ·  {k['count']} 帖" for i, k in enumerate(kws[:10])
         )
-        if out.get("summary"):
-            text += f"\n\n{out['summary']}"
+        if summary:
+            text += f"\n\n{summary}"
         notify.send("hot", text)
 
 
